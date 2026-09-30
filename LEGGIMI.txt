@@ -1,0 +1,17 @@
+AGENDA REPARTO V7 ONLINE
+
+- Login reale con Supabase Auth
+- Ruoli gestiti lato database: responsabile / personale
+- Utenti non autorizzati non possono leggere l'agenda
+- Esami, commenti e medico assegnato sincronizzati online
+- Intervalli di 15 minuti tra 08:00 e 20:00
+- Timeline semplificata
+- Urgenze evidenziate
+
+Prima di usare l'app:
+1. autorizzare almeno un indirizzo email nella tabella allowed_users come responsabile;
+2. caricare questi file su GitHub Pages sostituendo la V6;
+3. creare l'account dalla schermata dell'app con lo stesso indirizzo autorizzato;
+4. confermare l'email se Supabase lo richiede.
+
+Non usare dati identificativi reali dei pazienti finché non sono stati completati gli adempimenti privacy e di sicurezza del contesto sanitario.

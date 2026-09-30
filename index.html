@@ -101,6 +101,17 @@ dialog{width:min(650px,94vw);border:none;border-radius:13px;padding:18px}dialog:
 }
 </style>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+.auth-shell{min-height:100vh;display:grid;place-items:center;padding:24px;background:#eef2f5}
+.auth-card{width:min(440px,94vw);background:#fff;border:1px solid #d8dee4;border-radius:16px;padding:22px;box-shadow:0 10px 30px rgba(15,23,42,.08)}
+.auth-card h1{margin:0 0 6px}.auth-card p{color:#68737d}
+.auth-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.auth-error{margin-top:10px;color:#b42318;font-weight:700}
+.user-chip{font-size:12px;color:#53606c;background:#f2f5f8;padding:7px 9px;border-radius:999px}
+#appRoot.hidden,#authRoot.hidden{display:none!important}
+</style>
+
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1769d2">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -109,14 +120,39 @@ dialog{width:min(650px,94vw);border:none;border-radius:13px;padding:18px}dialog:
 <link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body>
+<div id="authRoot" class="auth-shell">
+  <div class="auth-card">
+    <h1>Agenda Reparto</h1>
+    <p>Accesso riservato. Inserisci le credenziali autorizzate.</p>
+    <form id="loginForm">
+      <label>Email<input id="loginEmail" type="email" autocomplete="username" required></label>
+      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <div class="auth-actions">
+        <button class="primary" type="submit">Accedi</button>
+        <button type="button" id="showSignup">Crea account</button>
+      </div>
+    </form>
+    <form id="signupForm" class="hidden">
+      <label>Nome visualizzato<input id="signupName" autocomplete="name"></label>
+      <label>Email<input id="signupEmail" type="email" autocomplete="email" required></label>
+      <label>Password<input id="signupPassword" type="password" minlength="8" autocomplete="new-password" required></label>
+      <div class="auth-actions">
+        <button class="primary" type="submit">Crea account</button>
+        <button type="button" id="showLogin">Torna al login</button>
+      </div>
+      <p style="font-size:12px">L'account potrà accedere solo se l'indirizzo è stato autorizzato dall'amministratore.</p>
+    </form>
+    <div id="authError" class="auth-error"></div>
+  </div>
+</div>
+<div id="appRoot" class="hidden">
+
 <header>
   <div class="header-row">
     <div><h1>Agenda Prenotazioni</h1><div class="subtitle">UOC Radiologia · ECO · TAC · RMN</div></div>
-    <div class="controls">
+    <div class="controls"><span id="userChip" class="user-chip"></span><button id="logoutBtn" type="button">Esci</button>
       <label>Data<input id="date" type="date"></label>
-      <label>Profilo
-        <select id="role"><option value="manager">Responsabile</option><option value="staff">Personale reparto</option></select>
-      </label>
+      
     </div>
   </div>
 </header>
@@ -203,8 +239,12 @@ dialog{width:min(650px,94vw);border:none;border-radius:13px;padding:18px}dialog:
 <div class="actions"><span></span><span></span><button type="button" id="closeComments">Chiudi</button><button class="primary">Aggiungi</button></div>
 </form></dialog>
 
+
 <script>
-const K='agenda_radiologia_timeline_v5';
+const SUPABASE_URL='https://msdlswmoyhgxvibbymfz.supabase.co';
+const SUPABASE_KEY='sb_publishable_Jur4BsBJwjRW_57Fr1026w_CKFre1VJ';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+
 const DAY_START=8*60, DAY_END=20*60, STEP=15;
 const $=id=>document.getElementById(id);
 const iso=()=>new Date().toISOString().slice(0,10);
@@ -212,27 +252,59 @@ const isoFromDate=d=>{let x=new Date(d);x.setMinutes(x.getMinutes()-x.getTimezon
 const tomorrowISO=()=>{let d=new Date();d.setDate(d.getDate()+1);return isoFromDate(d)};
 const fmt=d=>new Intl.DateTimeFormat('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date(d+'T12:00:00'));
 const nowStamp=()=>new Intl.DateTimeFormat('it-IT',{dateStyle:'short',timeStyle:'short'}).format(new Date());
-const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
-let S=JSON.parse(localStorage.getItem(K)||'null')||{date:iso(),role:'manager',doctor:'',activeMod:'ECO',events:[]};
-if(!S.activeMod)S.activeMod='ECO'; if(!Array.isArray(S.events))S.events=[];
-const save=()=>localStorage.setItem(K,JSON.stringify(S));
+const mins=t=>{let [h,m]=t.slice(0,5).split(':').map(Number);return h*60+m};
+const timeStr=m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 
-function mins(t){let [h,m]=t.split(':').map(Number);return h*60+m}
-function timeStr(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')}
-function dayEvents(mod=S.activeMod){return S.events.filter(e=>e.date===S.date&&e.mod===mod).sort((a,b)=>mins(a.start)-mins(b.start))}
-function findEvent(id){return S.events.find(e=>e.id===id)}
-function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
-function overlapLayout(events){
-  // Assign events to simple horizontal lanes when they overlap.
-  let active=[], maxLane=0;
-  return events.map(ev=>{
-    let st=mins(ev.start), en=mins(ev.end);
-    active=active.filter(x=>x.end>st);
-    let used=new Set(active.map(x=>x.lane)),lane=0;while(used.has(lane))lane++;
-    active.push({end:en,lane});maxLane=Math.max(maxLane,lane);
-    return {...ev,lane};
-  });
+let S={date:iso(),activeMod:localStorage.getItem('agenda_mod')||'ECO',role:null,user:null,events:[],doctor:''};
+
+function showAuth(msg=''){
+  $('authRoot').classList.remove('hidden');$('appRoot').classList.add('hidden');$('authError').textContent=msg;
 }
+function showApp(){
+  $('authRoot').classList.add('hidden');$('appRoot').classList.remove('hidden');
+}
+function authMsg(msg){$('authError').textContent=msg||''}
+
+async function loadProfile(){
+  const {data:{user}}=await sb.auth.getUser();
+  if(!user){showAuth();return false}
+  const {data:profile,error}=await sb.from('profiles').select('id,email,display_name,role,is_active').eq('id',user.id).maybeSingle();
+  if(error||!profile||!profile.is_active){
+    await sb.auth.signOut();
+    showAuth('Questo account non è autorizzato ad accedere all’agenda.');
+    return false;
+  }
+  S.user=user;S.role=profile.role;
+  $('userChip').textContent=(profile.display_name||profile.email)+' · '+(profile.role==='responsabile'?'Responsabile':'Personale');
+  showApp();return true;
+}
+
+$('showSignup').onclick=()=>{$('loginForm').classList.add('hidden');$('signupForm').classList.remove('hidden');authMsg()};
+$('showLogin').onclick=()=>{$('signupForm').classList.add('hidden');$('loginForm').classList.remove('hidden');authMsg()};
+
+$('loginForm').onsubmit=async e=>{
+  e.preventDefault();authMsg('Accesso in corso…');
+  const {error}=await sb.auth.signInWithPassword({email:$('loginEmail').value.trim(),password:$('loginPassword').value});
+  if(error){authMsg('Accesso non riuscito. Controlla email e password.');return}
+  if(await loadProfile()){await refreshAll()}
+};
+
+$('signupForm').onsubmit=async e=>{
+  e.preventDefault();authMsg('Creazione account…');
+  const {error}=await sb.auth.signUp({
+    email:$('signupEmail').value.trim(),
+    password:$('signupPassword').value,
+    options:{data:{display_name:$('signupName').value.trim()}}
+  });
+  if(error){authMsg(error.message);return}
+  authMsg('Account creato. Se richiesto, conferma l’indirizzo email dal messaggio ricevuto, poi torna al login.');
+};
+
+$('logoutBtn').onclick=async()=>{await sb.auth.signOut();S.user=null;S.role=null;showAuth()};
+
+function dayEvents(){return S.events.slice().sort((a,b)=>mins(a.start)-mins(b.start))}
+function findEvent(id){return S.events.find(e=>e.id===id)}
 
 function populateTimeSelects(){
   ['startTime','endTime'].forEach(id=>{$(id).innerHTML=''});
@@ -242,14 +314,56 @@ function populateTimeSelects(){
 }
 populateTimeSelects();
 
+async function loadEvents(){
+  const {data,error}=await sb.from('agenda_events')
+    .select('id,modality,exam_date,start_time,end_time,source_department,exam_type,reference_code,notes,urgent')
+    .eq('exam_date',S.date).eq('modality',S.activeMod).order('start_time');
+  if(error){console.error(error);S.events=[];return}
+  const ids=data.map(x=>x.id);
+  let commentsBy={};
+  if(ids.length){
+    const {data:comments}=await sb.from('agenda_comments').select('id,event_id,body,created_at,author_id').in('event_id',ids).order('created_at');
+    (comments||[]).forEach(c=>(commentsBy[c.event_id]??=[]).push(c));
+  }
+  S.events=data.map(x=>({
+    id:x.id,date:x.exam_date,mod:x.modality,start:x.start_time.slice(0,5),end:x.end_time.slice(0,5),
+    source:x.source_department,exam:x.exam_type,code:x.reference_code||'',notes:x.notes||'',special:x.urgent,
+    comments:commentsBy[x.id]||[]
+  }));
+}
+
+async function loadDoctor(){
+  const {data}=await sb.from('agenda_assignments').select('assigned_doctor').eq('exam_date',S.date).eq('modality',S.activeMod).maybeSingle();
+  S.doctor=data?.assigned_doctor||'';
+  $('doctor').value=S.doctor;
+}
+
+async function saveDoctor(){
+  if(S.role!=='responsabile')return;
+  const val=$('doctor').value.trim();
+  const {error}=await sb.from('agenda_assignments').upsert({
+    exam_date:S.date,modality:S.activeMod,assigned_doctor:val,updated_by:S.user.id
+  },{onConflict:'modality,exam_date'});
+  if(error)alert('Errore nel salvataggio del medico assegnato.');
+}
+
+async function refreshAll(){await Promise.all([loadEvents(),loadDoctor()]);render()}
+
+function overlapLayout(events){
+  let active=[];
+  return events.map(ev=>{
+    let st=mins(ev.start),en=mins(ev.end);
+    active=active.filter(x=>x.end>st);
+    let used=new Set(active.map(x=>x.lane)),lane=0;while(used.has(lane))lane++;
+    active.push({end:en,lane});return {...ev,lane};
+  });
+}
+
 function renderTimeline(){
   const tl=$('timeline');tl.innerHTML='';
-  // major markers every 2 hours; minor every hour
   for(let m=DAY_START;m<=DAY_END;m+=60){
     let pct=(m-DAY_START)/(DAY_END-DAY_START)*100;
-    let line=document.createElement('div');
-    line.className=(m%120===0||m===DAY_END)?'major-line':'minor-line';
-    line.style.top=pct+'%';tl.appendChild(line);
+    let line=document.createElement('div');line.className=(m%120===0||m===DAY_END)?'major-line':'minor-line';line.style.top=pct+'%';tl.appendChild(line);
     if(m%120===0||m===DAY_END){
       let lab=document.createElement('div');lab.className='major-label';lab.style.top=pct+'%';lab.textContent=timeStr(m);tl.appendChild(lab);
     }
@@ -257,36 +371,33 @@ function renderTimeline(){
   let events=overlapLayout(dayEvents());
   if(!events.length){
     let empty=document.createElement('div');empty.className='empty-state';
-    empty.textContent=S.role==='manager'?'Nessun esame inserito. Usa “+ Nuovo esame” oppure tocca la timeline.':'Nessun esame inserito.';
+    empty.textContent=S.role==='responsabile'?'Nessun esame inserito. Usa “+ Nuovo esame” oppure tocca la timeline.':'Nessun esame inserito.';
     tl.appendChild(empty);
   }
-  // detect max lane among overlapping events approximately
   events.forEach(ev=>{
     let st=clamp(mins(ev.start),DAY_START,DAY_END),en=clamp(mins(ev.end),DAY_START,DAY_END);
-    let top=(st-DAY_START)/(DAY_END-DAY_START)*100;
-    let height=Math.max(3,(en-st)/(DAY_END-DAY_START)*100);
+    let top=(st-DAY_START)/(DAY_END-DAY_START)*100,height=Math.max(3,(en-st)/(DAY_END-DAY_START)*100);
     let card=document.createElement('div');card.className='event-card'+(ev.special?' special':'')+((ev.comments||[]).length?' issue':'');
     card.style.top=`calc(${top}% + 2px)`;card.style.height=`calc(${height}% - 4px)`;
     if(ev.lane>0){let width=100/(ev.lane+1);card.style.left=`calc(${ev.lane*width}% + 12px)`;card.style.right='12px'}
     card.innerHTML=`<div class="event-title">${ev.exam}${ev.special?'<span class="urgent-badge">URGENTE</span>':''}</div><div class="event-source">${ev.source}</div>${(ev.comments||[]).length?`<div class="event-meta">💬 ${ev.comments.length}</div>`:''}`;
-    card.onclick=e=>{e.stopPropagation();S.role==='manager'?openEdit(ev.id):openDetail(ev.id)};
+    card.onclick=e=>{e.stopPropagation();S.role==='responsabile'?openEdit(ev.id):openDetail(ev.id)};
     tl.appendChild(card);
   });
-  if(S.role==='manager'){
+  if(S.role==='responsabile'){
     tl.onclick=e=>{
       if(e.target!==tl && !e.target.classList.contains('major-line') && !e.target.classList.contains('minor-line'))return;
       let rect=tl.getBoundingClientRect(),ratio=clamp((e.clientY-rect.top)/rect.height,0,1);
       let raw=DAY_START+ratio*(DAY_END-DAY_START),rounded=Math.round(raw/STEP)*STEP;
-      rounded=clamp(rounded,DAY_START,DAY_END-STEP);
-      openNew(timeStr(rounded),timeStr(Math.min(rounded+30,DAY_END)));
+      rounded=clamp(rounded,DAY_START,DAY_END-STEP);openNew(timeStr(rounded),timeStr(Math.min(rounded+30,DAY_END)));
     };
-  } else tl.onclick=null;
+  }else tl.onclick=null;
 }
 
 function render(){
-  $('date').value=S.date;$('role').value=S.role;$('doctor').value=S.doctor;$('doctor').disabled=S.role!=='manager';
+  $('date').value=S.date;$('doctor').value=S.doctor;$('doctor').disabled=S.role!=='responsabile';
   $('dayTitle').textContent=fmt(S.date);$('currentModality').textContent=S.activeMod;$('modalityTitle').textContent=S.activeMod;
-  $('addEvent').style.display=S.role==='manager'?'inline-block':'none';
+  $('addEvent').style.display=S.role==='responsabile'?'inline-block':'none';
   const head=$('cardHead');head.classList.remove('eco','tac','rmn');head.classList.add(S.activeMod==='ECO'?'eco':S.activeMod==='TAC'?'tac':'rmn');
   document.querySelectorAll('.mod-btn').forEach(b=>b.classList.toggle('active',b.dataset.mod===S.activeMod));
   $('today').classList.toggle('active-day',S.date===iso());$('tomorrow').classList.toggle('active-day',S.date===tomorrowISO());
@@ -304,8 +415,7 @@ function openNew(start='08:00',end='08:30'){
 }
 function openEdit(id){
   let e=findEvent(id);if(!e)return;
-  $('eventId').value=e.id;$('editTitle').textContent=e.mod+' · Modifica esame';
-  $('slotInfo').innerHTML=`<strong>${fmt(e.date)}</strong><br>Orario: ${e.start}–${e.end}`;
+  $('eventId').value=e.id;$('editTitle').textContent=e.mod+' · Modifica esame';$('slotInfo').innerHTML=`<strong>${fmt(e.date)}</strong><br>Orario: ${e.start}–${e.end}`;
   $('startTime').value=e.start;$('endTime').value=e.end;$('source').value=e.source;$('exam').value=e.exam;$('code').value=e.code||'';$('notes').value=e.notes||'';$('special').checked=!!e.special;
   $('deleteEvent').style.display='inline-block';$('editDlg').showModal();
 }
@@ -313,56 +423,65 @@ function openDetail(id){
   let e=findEvent(id);if(!e)return;
   $('detailTitle').textContent=e.mod+' · '+e.exam;
   $('detailGrid').innerHTML=`<div>Data</div><div>${fmt(e.date)}</div><div>Orario</div><div>${e.start}–${e.end}</div><div>Reparto</div><div>${e.source}</div><div>Esame</div><div>${e.exam}</div><div>Codice</div><div>${e.code||'—'}</div><div>Note</div><div>${e.notes||'—'}</div>`;
-  $('detailComments').innerHTML=(e.comments||[]).map(c=>`<div class="comment"><strong>${c.author}</strong><br>${c.text}<br><small>${c.date}</small></div>`).join('');
-  $('detailCommentBtn').onclick=()=>{$('detailDlg').close();openComments(id)};
-  $('detailDlg').showModal();
+  $('detailComments').innerHTML=(e.comments||[]).map(c=>`<div class="comment">${c.body}<br><small>${new Date(c.created_at).toLocaleString('it-IT')}</small></div>`).join('');
+  $('detailCommentBtn').onclick=()=>{$('detailDlg').close();openComments(id)};$('detailDlg').showModal();
 }
 function openComments(id){
-  let e=findEvent(id);if(!e)return;
-  $('commentEventId').value=id;$('commentInfo').innerHTML=`<strong>${e.mod} · ${e.exam}</strong><br>${fmt(e.date)} · ${e.start}–${e.end}`;
-  $('author').value=S.role==='manager'?'Responsabile':'';$('commentText').value='';
-  $('commentList').innerHTML=(e.comments||[]).map(c=>`<div class="comment"><strong>${c.author}</strong><br>${c.text}<br><small>${c.date}</small></div>`).join('');
+  let e=findEvent(id);if(!e)return;$('commentEventId').value=id;
+  $('commentInfo').innerHTML=`<strong>${e.mod} · ${e.exam}</strong><br>${fmt(e.date)} · ${e.start}–${e.end}`;
+  $('author').value=S.role==='responsabile'?'Responsabile':'Personale';$('author').disabled=true;$('commentText').value='';
+  $('commentList').innerHTML=(e.comments||[]).map(c=>`<div class="comment">${c.body}<br><small>${new Date(c.created_at).toLocaleString('it-IT')}</small></div>`).join('');
   $('commentDlg').showModal();
 }
 
-$('editForm').onsubmit=e=>{
+$('editForm').onsubmit=async e=>{
   e.preventDefault();
-  let start=$('startTime').value,end=$('endTime').value,source=$('source').value.trim(),exam=$('exam').value.trim();
+  let start=$('startTime').value,end=$('endTime').value;
   if(mins(end)<=mins(start)){alert("L'ora di fine deve essere successiva all'ora di inizio.");return}
-  if(mins(start)<DAY_START||mins(end)>DAY_END){alert('Gli orari devono essere compresi tra 08:00 e 20:00.');return}
-  let id=$('eventId').value;
-  let old=id?findEvent(id):null;
-  let obj={id:id||uid(),date:S.date,mod:S.activeMod,start,end,source,exam,code:$('code').value.trim(),notes:$('notes').value.trim(),special:$('special').checked,comments:old?.comments||[]};
-  if(id)S.events=S.events.map(x=>x.id===id?obj:x);else S.events.push(obj);
-  save();$('editDlg').close();render();
+  const payload={
+    modality:S.activeMod,exam_date:S.date,start_time:start,end_time:end,
+    source_department:$('source').value.trim(),exam_type:$('exam').value.trim(),
+    reference_code:$('code').value.trim()||null,notes:$('notes').value.trim()||null,
+    urgent:$('special').checked,updated_by:S.user.id
+  };
+  let id=$('eventId').value,error;
+  if(id){({error}=await sb.from('agenda_events').update(payload).eq('id',id))}
+  else{payload.created_by=S.user.id;({error}=await sb.from('agenda_events').insert(payload))}
+  if(error){alert('Salvataggio non riuscito: '+error.message);return}
+  $('editDlg').close();await refreshAll();
 };
-$('deleteEvent').onclick=()=>{
-  let id=$('eventId').value;if(!id)return;
-  if(confirm('Eliminare questo esame?')){S.events=S.events.filter(e=>e.id!==id);save();$('editDlg').close();render()}
+$('deleteEvent').onclick=async()=>{
+  let id=$('eventId').value;if(!id||!confirm('Eliminare questo esame?'))return;
+  const {error}=await sb.from('agenda_events').delete().eq('id',id);
+  if(error){alert('Eliminazione non riuscita.');return}$('editDlg').close();await refreshAll();
 };
-$('commentForm').onsubmit=e=>{
-  e.preventDefault();let ev=findEvent($('commentEventId').value);if(!ev)return;
-  ev.comments=ev.comments||[];ev.comments.push({author:$('author').value.trim(),text:$('commentText').value.trim(),date:nowStamp()});
-  save();$('commentDlg').close();render();
+$('commentForm').onsubmit=async e=>{
+  e.preventDefault();
+  const {error}=await sb.from('agenda_comments').insert({
+    event_id:$('commentEventId').value,author_id:S.user.id,body:$('commentText').value.trim()
+  });
+  if(error){alert('Commento non salvato.');return}$('commentDlg').close();await refreshAll();
 };
 $('cancelEdit').onclick=()=>$('editDlg').close();$('closeComments').onclick=()=>$('commentDlg').close();$('closeDetail').onclick=()=>$('detailDlg').close();
 $('addEvent').onclick=()=>openNew();
-$('date').onchange=e=>{S.date=e.target.value;save();render()};
-$('role').onchange=e=>{S.role=e.target.value;save();render()};
-$('doctor').oninput=e=>{S.doctor=e.target.value;save()};
-document.querySelectorAll('.mod-btn').forEach(btn=>btn.onclick=()=>{S.activeMod=btn.dataset.mod;save();render()});
-function move(n){let d=new Date(S.date+'T12:00:00');d.setDate(d.getDate()+n);S.date=isoFromDate(d);save();render()}
-$('prev').onclick=()=>move(-1);$('next').onclick=()=>move(1);$('today').onclick=()=>{S.date=iso();save();render()};$('tomorrow').onclick=()=>{S.date=tomorrowISO();save();render()};
+$('date').onchange=async e=>{S.date=e.target.value;await refreshAll()};
+$('doctor').onchange=saveDoctor;
+document.querySelectorAll('.mod-btn').forEach(btn=>btn.onclick=async()=>{S.activeMod=btn.dataset.mod;localStorage.setItem('agenda_mod',S.activeMod);await refreshAll()});
+async function move(n){let d=new Date(S.date+'T12:00:00');d.setDate(d.getDate()+n);S.date=isoFromDate(d);await refreshAll()}
+$('prev').onclick=()=>move(-1);$('next').onclick=()=>move(1);$('today').onclick=async()=>{S.date=iso();await refreshAll()};$('tomorrow').onclick=async()=>{S.date=tomorrowISO();await refreshAll()};
 $('printBtn').onclick=()=>window.print();
-$('exportBtn').onclick=()=>{let b=new Blob([JSON.stringify(S,null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='agenda_radiologia_backup_'+S.date+'.json';a.click();URL.revokeObjectURL(u)};
-$('importBtn').onclick=()=>$('importFile').click();
-$('importFile').onchange=e=>{let f=e.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let x=JSON.parse(r.result);if(!Array.isArray(x.events))throw 0;S=x;save();render();alert('Dati importati correttamente.')}catch{alert('File non valido.')}};r.readAsText(f)};
-render();
+$('exportBtn').style.display='none';$('importBtn').style.display='none';
+
+(async()=>{
+  const {data:{session}}=await sb.auth.getSession();
+  if(session && await loadProfile()) await refreshAll(); else showAuth();
+})();
 </script>
 
+</div>
 <script>
-if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+if ('serviceWorker' in navigator && location.protocol==='https:') {
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.error));
 }
 </script>
 </body>

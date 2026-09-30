@@ -1,0 +1,22 @@
+{
+  "name": "Agenda Reparto - UOC Radiologia",
+  "short_name": "Agenda Reparto",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eef2f5",
+  "theme_color": "#1769d2",
+  "description": "Agenda online riservata ECO/TAC/RMN con ruoli Responsabile e Personale",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
